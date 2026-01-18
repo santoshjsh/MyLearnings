@@ -1,0 +1,534 @@
+# System Design Case Studies
+
+## Case Study 1: Enterprise Knowledge Assistant (RAG at Scale)
+
+### Scenario
+A Fortune 500 financial services company needs an AI assistant that can answer questions across 50M+ documents including policies, procedures, regulations, and historical case data.
+
+### Requirements
+
+| Category | Requirement |
+|----------|-------------|
+| **Scale** | 50M documents, 10K daily active users |
+| **Latency** | P95 < 3 seconds for responses |
+| **Accuracy** | 95%+ relevance, near-zero hallucination tolerance |
+| **Security** | SOC2, role-based access to documents |
+| **Compliance** | Full audit trail, data residency in US/EU |
+
+### Architecture
+
+```mermaid
+flowchart TB
+    subgraph Users["👥 Users"]
+        WEB[Web App]
+        MOBILE[Mobile]
+        SLACK[Slack Bot]
+    end
+    
+    subgraph Gateway["🚪 Gateway Layer"]
+        AUTH[OAuth/SSO]
+        RL[Rate Limiting]
+        LB[Load Balancer]
+    end
+    
+    subgraph Query["🔍 Query Processing"]
+        QC[Query Classifier]
+        QR[Query Rewriter]
+        QD[Query Decomposition]
+    end
+    
+    subgraph Retrieval["📚 Retrieval Layer"]
+        HYB[Hybrid Search]
+        DENSE[(Pinecone<br/>Dense Index)]
+        SPARSE[(Elasticsearch<br/>Sparse Index)]
+        RR[Cohere Reranker]
+        CACHE[Semantic Cache<br/>Redis]
+    end
+    
+    subgraph Generation["✨ Generation"]
+        CTX[Context Assembly]
+        PROMPT[Prompt Engine]
+        LLM[Azure OpenAI<br/>GPT-4]
+        GUARD[Guardrails]
+    end
+    
+    subgraph Ingestion["📥 Ingestion Pipeline"]
+        S3[S3 Bucket]
+        OCR[Document OCR]
+        CHUNK[Smart Chunker]
+        EMB[Embedding<br/>Service]
+        META[Metadata<br/>Extractor]
+    end
+    
+    Users --> Gateway --> Query
+    Query --> CACHE
+    CACHE -->|Miss| HYB
+    HYB --> DENSE
+    HYB --> SPARSE
+    DENSE --> RR
+    SPARSE --> RR
+    RR --> Generation
+    Generation --> Users
+    
+    S3 --> OCR --> CHUNK --> EMB --> DENSE
+    CHUNK --> META --> SPARSE
+```
+
+### Key Design Decisions
+
+#### 1. Hybrid Search with Reranking
+**Decision**: Combine dense embeddings (Pinecone) with sparse (Elasticsearch BM25)
+**Rationale**: 
+- Dense catches semantic similarity
+- Sparse handles exact terms (policy numbers, regulations)
+- Reranker ensures best results surface
+
+#### 2. Access Control at Retrieval
+**Decision**: Filter at vector DB level, not post-retrieval
+**Implementation**:
+```python
+# Metadata filter in Pinecone query
+results = index.query(
+    vector=query_embedding,
+    filter={
+        "department": {"$in": user.departments},
+        "classification": {"$lte": user.clearance_level}
+    },
+    top_k=20
+)
+```
+
+#### 3. Semantic Caching
+**Decision**: Cache responses for semantically similar queries
+**Benefit**: 40% reduction in LLM costs, improved latency
+
+### Scaling Strategy
+
+| Component | Horizontal | Vertical | Notes |
+|-----------|------------|----------|-------|
+| Vector DB | Shards by department | - | 10 shards for 50M docs |
+| LLM | Multiple endpoints | - | Load balance across regions |
+| Cache | Redis Cluster | - | 500GB for 30-day retention |
+| Ingestion | Async workers | - | Scale with queue depth |
+
+### Trade-offs Made
+
+| Trade-off | Chose | Over | Reason |
+|-----------|-------|------|--------|
+| Cost vs Accuracy | Accuracy | Lower cost | Regulatory requirement |
+| Latency vs Freshness | Caching | Real-time | 80% queries cacheable |
+| Managed vs Self-hosted | Managed (Pinecone) | Self-hosted | Operational simplicity |
+
+---
+
+## Case Study 2: AI-Powered QMS for Manufacturing
+
+### Scenario
+A manufacturing company with 50+ facilities needs an AI-powered Quality Management System that assists with audits, non-conformance management, CAPA tracking, and regulatory compliance.
+
+> [!NOTE]
+> **Your Experience**: This case study is tailored to your QMS background. Customize the specific examples with your actual implementation details.
+
+### Requirements
+
+| Category | Requirement |
+|----------|-------------|
+| **Users** | Quality managers, auditors, operators (5000+ users) |
+| **Scope** | Audits, NCM, CAPA, Document Control, Training |
+| **Integration** | ERP, MES, IoT sensors, Document repositories |
+| **Compliance** | ISO 9001, FDA 21 CFR Part 11, ISO 13485 |
+| **Offline** | Must work during network outages for critical functions |
+
+### Architecture
+
+```mermaid
+flowchart TB
+    subgraph Users["👥 User Interfaces"]
+        WEB[Web Dashboard]
+        MOB[Mobile App<br/>Offline-capable]
+        TAB[Tablet<br/>Shop Floor]
+    end
+    
+    subgraph AI_Layer["🤖 AI Services"]
+        subgraph Assistants["AI Assistants"]
+            AUDIT_AI[Audit Copilot]
+            NCM_AI[NCM Analyzer]
+            CAPA_AI[CAPA Recommender]
+            DOC_AI[Document Assistant]
+        end
+        
+        subgraph Core_AI["AI Core"]
+            RAG[RAG Engine]
+            AGENT[Agent Orchestrator]
+            SIMILAR[Similar Case Finder]
+            RISK[Risk Predictor]
+        end
+    end
+    
+    subgraph QMS_Backend["⚙️ QMS Backend"]
+        AUDIT[Audit Module]
+        NCM[NCM Module]
+        CAPA[CAPA Module]
+        DOC[Document Control]
+        TRAIN[Training Module]
+    end
+    
+    subgraph Data["💾 Data Layer"]
+        VDB[(Vector DB<br/>Standards & Procedures)]
+        PG[(PostgreSQL<br/>Transactional)]
+        HIST[(Historical<br/>NCM/CAPA Data)]
+        BLOB[Blob Storage<br/>Evidence Files]
+    end
+    
+    subgraph Integration["🔗 Integrations"]
+        ERP[SAP/Oracle ERP]
+        MES[MES System]
+        IOT[IoT Sensors]
+        REG[Regulatory DB]
+    end
+    
+    Users --> AI_Layer
+    AI_Layer <--> QMS_Backend
+    QMS_Backend <--> Data
+    QMS_Backend <--> Integration
+    Core_AI --> VDB
+    Core_AI --> HIST
+```
+
+### AI Feature Deep-Dives
+
+#### Feature 1: Intelligent Audit Checklist Generation
+```mermaid
+flowchart LR
+    subgraph Input["📋 Input"]
+        STD[Standard<br/>ISO 9001]
+        PROC[Procedures]
+        RISK[Risk Areas]
+        HIST[Past Findings]
+    end
+    
+    subgraph Processing["⚙️ Processing"]
+        RAG[RAG: Retrieve<br/>Relevant Clauses]
+        LLM[LLM: Generate<br/>Questions]
+        RANK[Risk-based<br/>Prioritization]
+    end
+    
+    subgraph Output["✅ Output"]
+        CL[Checklist Items]
+        EV[Evidence<br/>Requirements]
+        LINK[Linked<br/>Procedures]
+    end
+    
+    Input --> Processing --> Output
+```
+
+**Implementation Approach**:
+```python
+async def generate_audit_checklist(
+    standard: str,
+    scope: list[str],
+    department: str,
+    past_findings: list[Finding]
+) -> Checklist:
+    # 1. Retrieve relevant standard clauses
+    clauses = await rag.retrieve(
+        query=f"{standard} requirements for {scope}",
+        filter={"standard": standard}
+    )
+    
+    # 2. Get past findings for this area
+    relevant_findings = find_similar_findings(
+        department, scope, past_findings
+    )
+    
+    # 3. Generate checklist with LLM
+    checklist = await llm.generate(
+        template=AUDIT_CHECKLIST_PROMPT,
+        clauses=clauses,
+        findings=relevant_findings,
+        risk_level=calculate_risk(department, scope)
+    )
+    
+    return checklist
+```
+
+#### Feature 2: Similar Case Finder for NCM/CAPA
+
+```mermaid
+flowchart TB
+    NEW[New NCM Report] --> EMB[Generate<br/>Embedding]
+    EMB --> SEARCH[Vector Search<br/>Historical Cases]
+    SEARCH --> FILTER[Filter by:<br/>• Product family<br/>• Failure mode<br/>• Department]
+    FILTER --> ENRICH[Enrich with<br/>CAPA outcomes]
+    ENRICH --> RANK[Rank by<br/>Resolution success]
+    RANK --> DISPLAY[Display Similar<br/>Cases + Actions]
+```
+
+**Value Proposition**:
+- 60% faster root cause identification
+- Learn from past successes/failures
+- Prevent recurring issues
+
+#### Feature 3: Regulatory Compliance Monitoring
+
+```mermaid
+flowchart LR
+    subgraph Sources["📰 Sources"]
+        FDA[FDA Updates]
+        ISO[ISO Standards]
+        EU[EU MDR]
+    end
+    
+    subgraph Processing["⚙️ AI Processing"]
+        PARSE[Parse Changes]
+        MAP[Map to<br/>Internal Docs]
+        GAP[Gap Analysis]
+        ALERT[Alert Generation]
+    end
+    
+    subgraph Action["✅ Actions"]
+        NOTIFY[Notify<br/>Stakeholders]
+        TASK[Create<br/>Tasks]
+        UPDATE[Flag Docs<br/>for Review]
+    end
+    
+    Sources --> Processing --> Action
+```
+
+### Multi-Tenancy Design
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                   Tenant Isolation                       │
+├─────────────────────────────────────────────────────────┤
+│                                                          │
+│  Organization → Site → Department → User                │
+│                                                          │
+│  Data Isolation:                                         │
+│  ├── Separate vector namespaces per org                 │
+│  ├── Row-level security in PostgreSQL                   │
+│  ├── Tenant ID in all API calls                         │
+│  └── Audit logs partitioned by tenant                   │
+│                                                          │
+│  AI Model Customization:                                 │
+│  ├── Per-tenant prompt templates                         │
+│  ├── Tenant-specific fine-tuned embeddings              │
+│  └── Custom risk scoring models                         │
+│                                                          │
+└─────────────────────────────────────────────────────────┘
+```
+
+### Offline Capabilities
+
+| Feature | Offline Mode | Sync Strategy |
+|---------|--------------|---------------|
+| Audit execution | ✅ Full | Queue changes, sync on connect |
+| Evidence capture | ✅ Photos/notes | Upload when online |
+| AI assistance | ⚠️ Limited (cached) | Pre-cache common queries |
+| NCM creation | ✅ Full | Conflict resolution on sync |
+
+### Compliance Considerations
+
+#### FDA 21 CFR Part 11 (Electronic Records)
+- Audit trails for all AI-generated content
+- Clear labeling: "AI-assisted" vs "Human-verified"
+- Electronic signatures for approvals
+- Data integrity validation
+
+#### AI-Specific Compliance
+```
+┌─────────────────────────────────────────────────────────┐
+│              AI Governance for QMS                       │
+├─────────────────────────────────────────────────────────┤
+│                                                          │
+│  Transparency                                            │
+│  ├── Show reasoning/sources for AI recommendations     │
+│  ├── Confidence scores on suggestions                   │
+│  └── User can override any AI decision                 │
+│                                                          │
+│  Auditability                                            │
+│  ├── Log all AI interactions                            │
+│  ├── Version AI models with change history              │
+│  └── Track accuracy metrics over time                   │
+│                                                          │
+│  Human-in-Loop                                           │
+│  ├── Critical decisions require human approval          │
+│  ├── AI suggests, human decides                         │
+│  └── Escalation paths for uncertainty                   │
+│                                                          │
+└─────────────────────────────────────────────────────────┘
+```
+
+### Key Talking Points for Interview
+
+1. **"How did you handle AI in a regulated environment?"**
+   - Implemented transparency through source citations
+   - All AI recommendations logged with reasoning
+   - Clear human approval gates for critical actions
+
+2. **"How did you scale the system across facilities?"**
+   - Multi-tenant architecture with org/site/department hierarchy
+   - Per-tenant vector namespaces for document isolation
+   - Centralized AI services with tenant-aware filtering
+
+3. **"How did you handle similar case finding?"**
+   - Embedding-based similarity with metadata filtering
+   - Incorporated resolution success into ranking
+   - Continuous learning from user feedback
+
+---
+
+## Case Study 3: Real-time Customer Support Copilot
+
+### Scenario
+A SaaS company needs an AI copilot that assists support agents in real-time during customer conversations, suggesting responses, retrieving relevant documentation, and automating common tasks.
+
+### Requirements
+
+| Category | Requirement |
+|----------|-------------|
+| **Users** | 500 support agents, 24/7 operation |
+| **Volume** | 50K conversations/day |
+| **Latency** | Suggestions within 500ms |
+| **Integration** | CRM, Ticketing, Knowledge Base, Product APIs |
+| **Accuracy** | 90%+ suggestion acceptance rate |
+
+### Architecture
+
+```mermaid
+flowchart TB
+    subgraph Conversation["💬 Conversation Layer"]
+        CHAT[Chat Widget]
+        EMAIL[Email]
+        PHONE[Phone<br/>Transcription]
+    end
+    
+    subgraph Copilot["🤖 Copilot Engine"]
+        STREAM[Stream Processor]
+        INTENT[Intent Classifier]
+        RAG[Knowledge RAG]
+        SUGGEST[Response Suggester]
+        ACTION[Action Executor]
+    end
+    
+    subgraph Agent_UI["👤 Agent Interface"]
+        SUGGESTIONS[Response<br/>Suggestions]
+        CONTEXT[Customer<br/>Context]
+        ACTIONS[Quick<br/>Actions]
+    end
+    
+    subgraph Data["💾 Data Sources"]
+        KB[(Knowledge Base)]
+        CRM[(CRM Data)]
+        HIST[(Conversation<br/>History)]
+        PROD[Product APIs]
+    end
+    
+    Conversation -->|Real-time| STREAM
+    STREAM --> INTENT
+    INTENT --> RAG
+    RAG --> SUGGEST
+    SUGGEST --> Agent_UI
+    INTENT --> ACTION
+    ACTION --> PROD
+    
+    Data --> RAG
+    Data --> CONTEXT
+```
+
+### Real-time Processing Pipeline
+
+```mermaid
+sequenceDiagram
+    participant C as Customer
+    participant S as Stream Processor
+    participant I as Intent Classifier
+    participant R as RAG Engine
+    participant G as Response Generator
+    participant A as Agent
+    
+    C->>S: Message: "My order hasn't arrived"
+    S->>I: Classify intent (50ms)
+    I->>R: Retrieve: order_status + shipping_issues (100ms)
+    I->>G: Generate suggestions (200ms)
+    par Parallel fetch
+        R-->>G: KB articles
+        and CRM lookup
+        Note over S: Fetch order details
+        S-->>G: Order: #12345, shipped 3 days ago
+    end
+    G->>A: 3 ranked suggestions (total: 400ms)
+    A->>C: Selected response
+```
+
+### Key Optimizations for Latency
+
+| Optimization | Technique | Impact |
+|--------------|-----------|--------|
+| **Streaming** | Start generating before full retrieval | -150ms |
+| **Pre-warming** | Load customer context on connection | -100ms |
+| **Caching** | Cache common KB queries | -200ms when hit |
+| **Model selection** | GPT-4-mini for suggestions | -300ms vs GPT-4 |
+| **Edge deployment** | Embedding model at edge | -50ms |
+
+### Metrics and Feedback Loop
+
+```mermaid
+flowchart LR
+    subgraph Metrics["📊 Metrics"]
+        ACC[Suggestion<br/>Acceptance Rate]
+        LAT[Response<br/>Latency]
+        CSAT[Customer<br/>Satisfaction]
+        RES[Resolution<br/>Time]
+    end
+    
+    subgraph Feedback["🔄 Feedback"]
+        ACCEPT[Agent Accepts]
+        EDIT[Agent Edits]
+        REJECT[Agent Rejects]
+    end
+    
+    subgraph Improvement["📈 Improvement"]
+        FINETUNE[Fine-tune<br/>Response Model]
+        PROMPT[Optimize<br/>Prompts]
+        KB_UPDATE[Update<br/>Knowledge Base]
+    end
+    
+    Feedback --> Metrics
+    Metrics --> Improvement
+    Improvement -->|Weekly| Model
+```
+
+### Trade-offs
+
+| Decision | Trade-off | Rationale |
+|----------|-----------|-----------|
+| GPT-4-mini over GPT-4 | Accuracy for speed | Latency critical for real-time |
+| 3 suggestions max | More options for simplicity | Agents prefer quick decisions |
+| Auto-actions limited | Autonomy for control | Avoid customer-facing errors |
+
+---
+
+## Interview Discussion Framework
+
+For any case study, be prepared to discuss:
+
+### 1. Requirements Gathering
+- "What questions would you ask stakeholders?"
+- "How would you prioritize conflicting requirements?"
+
+### 2. Architecture Decisions
+- "Why did you choose X over Y?"
+- "What would you change with unlimited budget?"
+
+### 3. Scaling Strategy
+- "How does this handle 10x load?"
+- "What's the bottleneck?"
+
+### 4. Operations
+- "How do you monitor this?"
+- "What's your rollback strategy?"
+
+### 5. Evolution
+- "How would you add feature Z?"
+- "What technical debt exists?"
